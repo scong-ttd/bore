@@ -1,5 +1,5 @@
 use anyhow::Result;
-use bore_cli::{client::Client, server::Server};
+use bore_cli::{client::Client, server::{Server, ServerCallbacks}, haproxy::HaproxyAdmin};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
@@ -45,8 +45,39 @@ enum Command {
     },
 }
 
+struct HaproxyCallbacks(HaproxyAdmin);
+impl HaproxyCallbacks {
+    fn new(stream_path: &str, server_prefix: &str) -> Self {
+        Self { 0: HaproxyAdmin::new(stream_path.to_string(), server_prefix.to_string()) }
+    }
+}
+
+impl ServerCallbacks for HaproxyCallbacks {
+    fn on_established(&self, port: u16) -> std::io::Result<()> {
+        self.0.add_server(port)
+    }
+
+    fn on_dropped(&self, port: u16) -> std::io::Result<()> {
+        self.0.del_server(port)
+    }
+}
+
+struct DummyCallbacks();
+impl ServerCallbacks for DummyCallbacks {
+    fn on_established(&self, port: u16) -> std::io::Result<()> {
+        println!("established => 127.0.0.1:{}", port);
+        Ok(())
+    }
+
+    fn on_dropped(&self, port: u16) -> std::io::Result<()> {
+        println!("dropped     => 127.0.0.1:{}", port);
+        Ok(())
+    }
+}
+
 #[tokio::main]
 async fn run(command: Command) -> Result<()> {
+
     match command {
         Command::Local {
             local_host,
@@ -59,7 +90,9 @@ async fn run(command: Command) -> Result<()> {
             client.listen().await?;
         }
         Command::Server { min_port, secret } => {
-            Server::new(min_port, secret.as_deref()).listen().await?;
+            let callbacks = Box::new(HaproxyCallbacks::new("/var/run/admin.sock", "operators/op"));
+            // let callbacks = Box::new(DummyCallbacks{});
+            Server::new(min_port, secret.as_deref(), Some(callbacks)).listen().await?;
         }
     }
 

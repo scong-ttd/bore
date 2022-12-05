@@ -17,7 +17,7 @@ lazy_static! {
 
 /// Spawn the server, giving some time for the control port TcpListener to start.
 async fn spawn_server(secret: Option<&str>) {
-    tokio::spawn(Server::new(1024, secret).listen());
+    tokio::spawn(Server::new(1024, secret, None).listen());
     time::sleep(Duration::from_millis(50)).await;
 }
 

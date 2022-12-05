@@ -15,6 +15,11 @@ use uuid::Uuid;
 use crate::auth::Authenticator;
 use crate::shared::{proxy, ClientMessage, Delimited, ServerMessage, CONTROL_PORT};
 
+pub trait ServerCallbacks : Send + Sync {
+    fn on_established(&self, port: u16) -> std::io::Result<()>;
+    fn on_dropped(&self, port: u16) -> std::io::Result<()>;
+}
+
 /// State structure for the server.
 pub struct Server {
     /// The minimum TCP port that can be forwarded.
@@ -25,15 +30,18 @@ pub struct Server {
 
     /// Concurrent map of IDs to incoming connections.
     conns: Arc<DashMap<Uuid, TcpStream>>,
+
+    callbacks: Option<Box<dyn ServerCallbacks>>,
 }
 
 impl Server {
     /// Create a new server with a specified minimum port number.
-    pub fn new(min_port: u16, secret: Option<&str>) -> Self {
+    pub fn new(min_port: u16, secret: Option<&str>, callbacks: Option<Box<dyn ServerCallbacks>>) -> Self {
         Server {
             min_port,
             conns: Arc::new(DashMap::new()),
             auth: secret.map(Authenticator::new),
+            callbacks,
         }
     }
 
@@ -94,6 +102,12 @@ impl Server {
                 };
                 let port = listener.local_addr()?.port();
                 stream.send(ServerMessage::Hello(port)).await?;
+                
+                if let Some(callbacks) = &self.callbacks {
+                    if let Err(e) = callbacks.on_established(port) {
+                        warn!("error adding endpoints to haproxy: {}", e);
+                    }
+                }
 
                 loop {
                     if stream.send(ServerMessage::Heartbeat).await.is_err() {
@@ -109,6 +123,7 @@ impl Server {
                         let conns = Arc::clone(&self.conns);
 
                         conns.insert(id, stream2);
+
                         tokio::spawn(async move {
                             // Remove stale entries to avoid memory leaks.
                             sleep(Duration::from_secs(10)).await;
@@ -143,6 +158,6 @@ impl Server {
 
 impl Default for Server {
     fn default() -> Self {
-        Server::new(1024, None)
+        Server::new(1024, None, None)
     }
 }
